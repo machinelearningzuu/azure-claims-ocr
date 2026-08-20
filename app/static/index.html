@@ -60,7 +60,9 @@
     <p class="muted">Check every value against the document. Amber rows are
        low-confidence; red rows are <strong>mandatory fields the OCR found
        empty</strong> - fill them from the document, or tick “confirm missing”
-       to approve without them (a deliberate, recorded decision).</p>
+       to approve without them (a deliberate, recorded decision).
+       One claim at a time: newer uploads wait in the queue until you
+       approve or reject this one.</p>
     <table>
       <thead><tr><th>Field</th><th></th><th>Extracted value (editable)</th><th>Confidence</th></tr></thead>
       <tbody id="reviewFields"></tbody>
@@ -263,6 +265,13 @@ function updatePendingCount(n) {
     n > 0 ? `${n} more waiting in queue` : "";
 }
 
+async function refreshQueueStatus() {
+  // Always-visible queue state, fetched fresh so a page reload can't hide
+  // what's waiting behind the claim currently under review.
+  const status = await (await fetch("/queue/status")).json();
+  updatePendingCount(status.pending);
+}
+
 async function loadApproved() {
   const res = await fetch("/claims/approved");
   const claims = await res.json();
@@ -284,7 +293,7 @@ async function loadApproved() {
 
 async function init() {
   template = await (await fetch("/template")).json();
-  await Promise.all([loadNextReview(), loadApproved()]);
+  await Promise.all([loadNextReview(), loadApproved(), refreshQueueStatus()]);
 }
 init();
 </script>

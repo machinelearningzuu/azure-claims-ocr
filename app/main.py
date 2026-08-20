@@ -57,6 +57,16 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/queue/status")
+def queue_status() -> dict:
+    """Live queue state, so the UI can always show what is waiting instead
+    of leaving the reviewer guessing. Reminder of the Layer 1 limitation:
+    both numbers live in process memory and reset to zero on any server
+    restart, including the automatic restarts uvicorn --reload performs
+    whenever a file changes. Layer 3's Service Bus makes them durable."""
+    return {"pending": queue_service.size(), "in_review": len(_in_review)}
+
+
 @app.get("/template")
 def template_spec() -> dict:
     """Field specs for the active template. The UI renders itself from this,
