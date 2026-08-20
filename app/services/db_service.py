@@ -85,29 +85,39 @@ def create_pending(claim: PendingClaim) -> None:
         session.commit()
 
 
-def next_for_review() -> Optional[PendingClaim]:
-    """The claim the human should see now.
-
-    A claim already in_review (e.g. the page was refreshed, or the server
-    restarted mid-review) is re-served first; otherwise the oldest pending
-    claim is picked up and marked in_review. The status column is the
-    durable version of what a message broker calls a peek-lock."""
+def list_open() -> list[dict]:
+    """The reviewer's work list: every claim not yet settled, oldest first.
+    The human picks any of these in any order; settled claims (approved or
+    rejected) no longer appear. Survives restarts by construction, since it
+    is just a query over the system of record."""
     with Session() as session:
-        row = (
+        rows = (
             session.query(ClaimRow)
-            .filter(ClaimRow.status == IN_REVIEW)
+            .filter(ClaimRow.status.in_([PENDING, IN_REVIEW]))
             .order_by(ClaimRow.seq)
-            .first()
+            .all()
         )
-        if row is None:
-            row = (
-                session.query(ClaimRow)
-                .filter(ClaimRow.status == PENDING)
-                .order_by(ClaimRow.seq)
-                .first()
-            )
-            if row is None:
-                return None
+        return [
+            {
+                "id": row.id,
+                "filename": row.source_filename,
+                "uploaded_at": row.uploaded_at,
+                "status": row.status,
+            }
+            for row in rows
+        ]
+
+
+def open_for_review(claim_id: str) -> Optional[PendingClaim]:
+    """The human chose this document from the work list. Marks it in_review
+    (the durable version of a broker's peek-lock) and returns the full
+    proposal. Returns None if the claim doesn't exist or is already
+    settled: what's approved or rejected cannot be reopened."""
+    with Session() as session:
+        row = session.query(ClaimRow).filter(ClaimRow.id == claim_id).first()
+        if row is None or row.status not in (PENDING, IN_REVIEW):
+            return None
+        if row.status == PENDING:
             row.status = IN_REVIEW
             session.commit()
         return _row_to_pending(row)

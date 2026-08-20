@@ -1,15 +1,15 @@
 """Queue service: the seam between "a claim arrived" and "a human reviews it".
 
-The rest of the app only knows two operations:
+The rest of the app only knows:
 
-    publish(item)        a new AI proposal enters the pending-review flow
-    consume() -> item    the next proposal a human should look at (None if none)
+    publish(item)   a new AI proposal enters the pending-review flow
+    size()          how many proposals are waiting
 
 Layer 1 implementation: a thin facade over the database. The claim's status
-column IS the queue: publish() persists it as pending_review, consume()
-flips the oldest one to in_review. Because the database is the system of
-record, a restart loses nothing; whatever was pending or mid-review is
-still there afterwards.
+column IS the queue: publish() persists the claim as pending_review, and
+the reviewer's work list is simply a query over unsettled statuses
+(db_service.list_open). Because the database is the system of record, a
+restart loses nothing.
 
 This is the transactional-outbox idea in miniature: state lives in the
 database, and the queue is DERIVED from that state, never the storage
@@ -29,12 +29,6 @@ def publish(item: PendingClaim) -> None:
     db_service.create_pending(item)
 
 
-def consume() -> PendingClaim | None:
-    """The claim the human should see now: a claim already mid-review is
-    re-served first, otherwise the oldest pending one is picked up."""
-    return db_service.next_for_review()
-
-
 def size() -> int:
-    """How many proposals are waiting behind the current one (shown in the UI)."""
+    """How many proposals are waiting for review (shown in the UI)."""
     return db_service.counts()["pending"]

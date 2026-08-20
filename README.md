@@ -99,11 +99,12 @@ Open http://127.0.0.1:8000.
 
 ## Trying the flow end to end
 
-1. Upload `dataset/metlife-tpd_peter-mitchell_full.pdf`. The request goes
-   to real Azure Document Intelligence, so expect a few seconds.
-2. Review the proposal. Amber rows are low-confidence (threshold 0.80,
-   configurable in `.env`). Red rows are mandatory fields the OCR found
-   empty.
+1. Upload a few dataset PDFs (the file picker accepts multiple). Each goes
+   to real Azure Document Intelligence, so expect a few seconds per file.
+2. The review queue lists every unsettled document by name. Click any of
+   them, in any order; approved and rejected documents leave the list.
+   Amber rows are low-confidence (threshold 0.80, configurable in `.env`).
+   Red rows are mandatory fields the OCR found empty.
 3. Compare the screen against the ground truth JSON next to the PDF: what
    did OCR get right, get wrong, and miss entirely?
 4. Corrupt a value, then fix it. What you approve is what gets stored, not

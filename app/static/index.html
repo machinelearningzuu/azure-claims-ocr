@@ -28,6 +28,10 @@
   .badge.gap      { background: #fbe3e0; color: #a33; }
   .badge.mand     { background: #e8eefb; color: #2d4a8a; }
   .confirm-missing { font-size: .8rem; color: #a33; white-space: nowrap; }
+  /* The reviewer's work list */
+  .doc-row { cursor: pointer; }
+  .doc-row:hover { background: #f4f6fb; }
+  .doc-row.selected { background: #e8eefb; }
   .banner { padding: .6rem .9rem; border-radius: 6px; margin: .8rem 0; display: none; }
   .banner.info  { background: #e8eefb; color: #2d4a8a; display: block; }
   .banner.error { background: #fbe3e0; color: #a33; display: block; }
@@ -51,18 +55,23 @@
   <span class="muted" id="pendingCount"></span>
 </section>
 
-<h2>2 · Review the AI's proposal</h2>
+<h2>2 · Review queue</h2>
 <section id="reviewSection">
   <p class="muted" id="reviewEmpty">Nothing waiting for review.</p>
+  <table id="workListTable" style="display:none">
+    <thead><tr><th>Document</th><th>Uploaded</th><th>Status</th></tr></thead>
+    <tbody id="workList"></tbody>
+  </table>
+  <p class="muted" id="workListHint" style="display:none">Click a document to
+     review it. Approved and rejected documents leave this list.</p>
   <div id="reviewCard" style="display:none">
+    <hr style="border:none;border-top:2px solid #e0e0e8;margin:1.2rem 0">
     <p><strong id="reviewFilename"></strong>
        <span class="muted" id="reviewMeta"></span></p>
     <p class="muted">Check every value against the document. Amber rows are
        low-confidence; red rows are <strong>mandatory fields the OCR found
        empty</strong> - fill them from the document, or tick “confirm missing”
-       to approve without them (a deliberate, recorded decision).
-       One claim at a time: newer uploads wait in the queue until you
-       approve or reject this one.</p>
+       to approve without them (a deliberate, recorded decision).</p>
     <table>
       <thead><tr><th>Field</th><th></th><th>Extracted value (editable)</th><th>Confidence</th></tr></thead>
       <tbody id="reviewFields"></tbody>
@@ -130,26 +139,60 @@ async function upload() {
       showBanner(`OCR done - ${queued} proposal${queued === 1 ? "" : "s"} in the review queue. Nothing saved yet.`, "info");
     }
     input.value = "";
-    await loadNextReview();
+    await loadWorkList();
   } finally {
     btn.disabled = false; btn.textContent = "Upload & run OCR";
   }
 }
 
-async function loadNextReview() {
-  const res = await fetch("/review/next");
-  if (res.status === 204) {
-    currentClaim = null;
-    document.getElementById("reviewCard").style.display = "none";
-    document.getElementById("reviewEmpty").style.display = "block";
+async function loadWorkList() {
+  // The reviewer's work list: every unsettled claim, clickable in any
+  // order. Settled claims are simply no longer in the response.
+  const docs = await (await fetch("/review/pending")).json();
+  const table = document.getElementById("workListTable");
+  const hint = document.getElementById("workListHint");
+  const empty = document.getElementById("reviewEmpty");
+  const tbody = document.getElementById("workList");
+  tbody.innerHTML = "";
+
+  const anyDocs = docs.length > 0;
+  table.style.display = anyDocs ? "" : "none";
+  hint.style.display = anyDocs ? "" : "none";
+  empty.style.display = anyDocs ? "none" : "block";
+  if (!anyDocs) closeReviewCard();
+
+  for (const doc of docs) {
+    const tr = document.createElement("tr");
+    tr.className = "doc-row" + (currentClaim && currentClaim.id === doc.id ? " selected" : "");
+    const statusBadge = doc.status === "in_review"
+      ? `<span class="badge low">opened</span>`
+      : `<span class="badge ok">new</span>`;
+    tr.innerHTML = `<td>${doc.filename}</td><td>${doc.uploaded_at}</td><td>${statusBadge}</td>`;
+    tr.addEventListener("click", () => openClaim(doc.id));
+    tbody.appendChild(tr);
+  }
+  // If the claim on screen is no longer in the list (settled), close it.
+  if (currentClaim && !docs.some(doc => doc.id === currentClaim.id)) closeReviewCard();
+}
+
+function closeReviewCard() {
+  currentClaim = null;
+  document.getElementById("reviewCard").style.display = "none";
+}
+
+async function openClaim(claimId) {
+  const res = await fetch(`/review/${claimId}`);
+  if (!res.ok) {
+    showBanner("Could not open that document (already settled?).", "error");
+    await loadWorkList();
     return;
   }
   currentClaim = await res.json();
-  document.getElementById("reviewEmpty").style.display = "none";
   document.getElementById("reviewCard").style.display = "block";
   document.getElementById("reviewFilename").textContent = currentClaim.filename;
   document.getElementById("reviewMeta").textContent =
     ` · template: ${currentClaim.template} · uploaded ${currentClaim.uploaded_at}`;
+  await loadWorkList();  // refresh so this row shows "opened" and highlights
 
   const specByName = Object.fromEntries(template.fields.map(f => [f.name, f]));
   const tbody = document.getElementById("reviewFields");
@@ -247,7 +290,8 @@ async function approve() {
   const data = await res.json();
   showBanner("Approved - written to the database.", "info");
   updatePendingCount(data.pending_count);
-  await Promise.all([loadNextReview(), loadApproved()]);
+  closeReviewCard();
+  await Promise.all([loadWorkList(), loadApproved()]);
 }
 
 async function reject() {
@@ -255,9 +299,10 @@ async function reject() {
   const res = await fetch(`/review/${currentClaim.id}/reject`, { method: "POST" });
   if (!res.ok) { showBanner("Reject failed.", "error"); return; }
   const data = await res.json();
-  showBanner("Rejected - proposal discarded, nothing was saved.", "info");
+  showBanner("Rejected - recorded as declined, nothing approved.", "info");
   updatePendingCount(data.pending_count);
-  await loadNextReview();
+  closeReviewCard();
+  await loadWorkList();
 }
 
 function updatePendingCount(n) {
@@ -293,7 +338,7 @@ async function loadApproved() {
 
 async function init() {
   template = await (await fetch("/template")).json();
-  await Promise.all([loadNextReview(), loadApproved(), refreshQueueStatus()]);
+  await Promise.all([loadWorkList(), loadApproved(), refreshQueueStatus()]);
 }
 init();
 </script>

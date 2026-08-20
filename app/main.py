@@ -4,7 +4,8 @@ The flow, and where each piece of the pattern lives:
 
     POST /claims/upload        AI proposes: OCR result is persisted with
                                status pending_review (never as a fact)
-    GET  /review/next          human pulls the next proposal (-> in_review)
+    GET  /review/pending       the reviewer's work list: all unsettled claims
+    GET  /review/{id}          human opens a chosen claim (-> in_review)
     POST /review/{id}/approve  human commits: the ONLY path to approved
     POST /review/{id}/reject   human declines: recorded, nothing approved
     GET  /claims/approved      read back committed facts
@@ -26,7 +27,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app import config
@@ -107,14 +108,21 @@ async def upload_claim(file: UploadFile = File(...)) -> dict:
     return {"queued": True, "id": claim.id, "pending_count": queue_service.size()}
 
 
-@app.get("/review/next", response_model=None)
-def next_for_review() -> Response | PendingClaim:
-    """Hand the reviewer the next proposal. A claim already mid-review is
-    re-served first, so neither a page refresh nor a server restart loses
-    the claim someone was looking at."""
-    claim = queue_service.consume()
+@app.get("/review/pending")
+def review_work_list() -> list[dict]:
+    """Every claim awaiting a human decision, oldest first. The reviewer
+    picks any document in any order; settled claims drop off the list.
+    Survives restarts and refreshes because it is a DB query, not state."""
+    return db_service.list_open()
+
+
+@app.get("/review/{claim_id}")
+def open_claim(claim_id: str) -> PendingClaim:
+    """The human chose this document from the work list: mark it in_review
+    and hand over the full proposal for field-by-field review."""
+    claim = db_service.open_for_review(claim_id)
     if claim is None:
-        return Response(status_code=204)  # nothing waiting
+        raise HTTPException(status_code=404, detail="No such open claim.")
     return claim
 
 
