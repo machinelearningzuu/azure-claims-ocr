@@ -1,40 +1,40 @@
-"""Queue service: where AI proposals wait for a human.
+"""Queue service: the seam between "a claim arrived" and "a human reviews it".
 
 The rest of the app only knows two operations:
 
-    publish(item)        put an OCR result into the pending-review queue
-    consume() -> item    take the next one out for review (None if empty)
+    publish(item)        a new AI proposal enters the pending-review flow
+    consume() -> item    the next proposal a human should look at (None if none)
 
-This is the boundary that makes the system human-in-the-loop: OCR results
-are published HERE, not written to the database. The queue is the holding
-area for proposals; the database is reserved for human-approved facts.
+Layer 1 implementation: a thin facade over the database. The claim's status
+column IS the queue: publish() persists it as pending_review, consume()
+flips the oldest one to in_review. Because the database is the system of
+record, a restart loses nothing; whatever was pending or mid-review is
+still there afterwards.
 
-Layer 1 implementation: a plain in-process deque. Deliberately primitive.
-If the server restarts, pending items are lost, and only this one process
-can see the queue. Those two weaknesses are exactly why Layer 3 swaps this
-file's internals for Azure Service Bus (durable, and consumable by a
-separate worker process) WITHOUT changing the two-function interface above.
+This is the transactional-outbox idea in miniature: state lives in the
+database, and the queue is DERIVED from that state, never the storage
+itself. The queue is not a database.
+
+Layer 3: publish() will additionally send an Azure Service Bus message so
+a separate worker process wakes up and does the OCR asynchronously. The
+broker dispatches work; the database keeps being the truth.
 """
 
-from collections import deque
-
 from app.models import PendingClaim
-
-_queue: deque[PendingClaim] = deque()
+from app.services import db_service
 
 
 def publish(item: PendingClaim) -> None:
-    """Add an OCR proposal to the back of the pending-review queue."""
-    _queue.append(item)
+    """Persist a new AI proposal with status pending_review."""
+    db_service.create_pending(item)
 
 
 def consume() -> PendingClaim | None:
-    """Remove and return the oldest pending item, or None if the queue is empty."""
-    if not _queue:
-        return None
-    return _queue.popleft()
+    """The claim the human should see now: a claim already mid-review is
+    re-served first, otherwise the oldest pending one is picked up."""
+    return db_service.next_for_review()
 
 
 def size() -> int:
-    """How many proposals are waiting (shown in the UI)."""
-    return len(_queue)
+    """How many proposals are waiting behind the current one (shown in the UI)."""
+    return db_service.counts()["pending"]

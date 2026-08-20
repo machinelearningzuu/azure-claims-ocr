@@ -4,23 +4,29 @@ A deliberately small app that contains a real system-design pattern:
 **queue + worker + human-in-the-loop**, as used in bounded-AI claims
 automation for superannuation.
 
-The invariant, enforced in code: **AI output is a proposal sitting in a
-queue, never a committed fact.** There is no code path from OCR output to
-the database that does not pass through the approve endpoint, which means
-through a human.
+The invariant, enforced in code: **AI output is a proposal, never a
+committed fact.** Every claim lives in the database with a status
+(pending_review, in_review, approved, rejected), and the only code path
+that can set status=approved is the approve endpoint, which means a human.
 
 ## The flow
 
 ```
 Upload a claim document
   → OCR extracts fields, each with a confidence score     (the AI step)
-  → result goes into a PENDING-REVIEW queue, NOT the DB   (AI proposes, doesn't decide)
+  → result is persisted with status PENDING_REVIEW        (AI proposes, doesn't decide)
   → a human reviews every field against the document      (human-in-the-loop gate)
   → low-confidence fields are flagged for attention       (confidence routing)
   → empty mandatory fields block approval until the
     human fills them or explicitly confirms the gap       (the approval gate)
-  → only on human APPROVE is it written to the database   (the commit)
+  → only human APPROVE moves it to status APPROVED        (the commit)
 ```
+
+The database is the system of record for the whole lifecycle, so a server
+restart loses nothing: pending and mid-review claims are still there
+afterwards. The queue is derived from claim status, never a store of its
+own (the transactional-outbox idea): in Layer 3, Azure Service Bus will
+dispatch work to a separate OCR worker while the database stays the truth.
 
 ## Project structure
 
@@ -31,8 +37,8 @@ app/
   config.py            Environment configuration (.env)
   services/
     ocr_service.py     AI/extraction service (Azure Document Intelligence)
-    queue_service.py   Pending-review queue (in-process for Layer 1)
-    db_service.py      Approved claims store (SQLite for Layer 1)
+    queue_service.py   Review queue, a facade over claim status in the DB
+    db_service.py      System of record: claim lifecycle + approved facts
   static/index.html    The review page (plain HTML + JS, renders from /template)
 config/
   templates.yaml       Field schema per document template: names, labels,
@@ -149,8 +155,9 @@ pages, so nothing is lost.
 
 ## Known Layer 1 limitations (intentional, they motivate the next layers)
 
-- The pending queue is in-process: restart the server and unreviewed
-  proposals are gone. Layer 3's Service Bus fixes durability.
 - OCR runs inside the upload request, so the browser waits on Azure.
-  Layer 3 moves it to a separate worker pulling from the queue.
+  Layer 3 moves it to a separate worker, with Service Bus dispatching the
+  work while the database remains the system of record.
 - SQLite is a local file. Layer 2 moves to Azure PostgreSQL.
+- Single reviewer assumed: no locking against two people pulling the same
+  claim. Fine for a learning project with one human in the loop.

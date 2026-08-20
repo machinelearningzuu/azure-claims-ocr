@@ -2,17 +2,21 @@
 
 The flow, and where each piece of the pattern lives:
 
-    POST /claims/upload        AI proposes:   OCR, then publish to pending queue
-    GET  /review/next          human pulls the next proposal to review
-    POST /review/{id}/approve  human commits: ONLY here does data reach the DB
-    POST /review/{id}/reject   human discards a proposal entirely
+    POST /claims/upload        AI proposes: OCR result is persisted with
+                               status pending_review (never as a fact)
+    GET  /review/next          human pulls the next proposal (-> in_review)
+    POST /review/{id}/approve  human commits: the ONLY path to approved
+    POST /review/{id}/reject   human declines: recorded, nothing approved
     GET  /claims/approved      read back committed facts
+    GET  /queue/status         live counts from the system of record
     GET  /template             the active template's field specs (drives the UI)
 
-Two rules are enforced here:
+Every claim's state lives in the database from the moment of upload
+(pending_review -> in_review -> approved/rejected), so nothing is lost on
+restart. Two rules are enforced here:
 
-1. There is no code path from OCR output to db_service.save_approved() that
-   does not pass through the approve endpoint, i.e. through a human.
+1. Only the approve endpoint can move a claim to approved, which means only
+   a human can. The upload handler writes proposals, never facts.
 2. The gate rule: approval is REFUSED while a mandatory field is empty,
    unless the human has explicitly confirmed that specific field as missing.
    Skipping a mandatory field must be a deliberate act, never a default.
@@ -38,12 +42,6 @@ from app.services import db_service, ocr_service, queue_service
 
 app = FastAPI(title="Claims OCR - human-in-the-loop")
 
-# Items a human has pulled from the queue but not yet approved/rejected.
-# This mirrors what Azure Service Bus calls "peek-lock": consumed from the
-# queue, but held in limbo until the reviewer settles it. In Layer 3 the
-# real broker will manage this state for us.
-_in_review: dict[str, PendingClaim] = {}
-
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -59,12 +57,9 @@ def index() -> FileResponse:
 
 @app.get("/queue/status")
 def queue_status() -> dict:
-    """Live queue state, so the UI can always show what is waiting instead
-    of leaving the reviewer guessing. Reminder of the Layer 1 limitation:
-    both numbers live in process memory and reset to zero on any server
-    restart, including the automatic restarts uvicorn --reload performs
-    whenever a file changes. Layer 3's Service Bus makes them durable."""
-    return {"pending": queue_service.size(), "in_review": len(_in_review)}
+    """Live queue state, read from the database, so it survives restarts
+    and page refreshes alike."""
+    return db_service.counts()
 
 
 @app.get("/template")
@@ -79,9 +74,9 @@ def template_spec() -> dict:
 
 @app.post("/claims/upload")
 async def upload_claim(file: UploadFile = File(...)) -> dict:
-    """The AI step. Note what this handler does NOT do: it never touches the
-    database. OCR output becomes a PendingClaim and goes into the queue,
-    a proposal awaiting judgment, not a stored fact."""
+    """The AI step. The OCR result is persisted immediately as a
+    pending_review proposal: durable from this moment on, but still only a
+    proposal. Nothing here can mark anything approved."""
     document_bytes = await file.read()
     if not document_bytes:
         raise HTTPException(status_code=400, detail="Empty file.")
@@ -114,31 +109,25 @@ async def upload_claim(file: UploadFile = File(...)) -> dict:
 
 @app.get("/review/next", response_model=None)
 def next_for_review() -> Response | PendingClaim:
-    """Hand the reviewer the next proposal. If something is already mid-review
-    (e.g. the page was refreshed), re-serve it rather than losing it."""
-    if _in_review:
-        return next(iter(_in_review.values()))
+    """Hand the reviewer the next proposal. A claim already mid-review is
+    re-served first, so neither a page refresh nor a server restart loses
+    the claim someone was looking at."""
     claim = queue_service.consume()
     if claim is None:
         return Response(status_code=204)  # nothing waiting
-    _in_review[claim.id] = claim
     return claim
 
 
 @app.post("/review/{claim_id}/approve")
 def approve(claim_id: str, request: ApproveRequest) -> dict:
-    """THE COMMIT POINT. This is the only place in the entire app that writes
-    to the database, and it only ever receives values a human has reviewed
-    (and possibly corrected).
+    """THE COMMIT POINT. The only route to status=approved, and it only
+    ever carries values a human has reviewed (and possibly corrected).
 
     The gate: if mandatory fields are empty and the human has NOT explicitly
     confirmed each one as missing, approval is refused with the list of
     problems. The UI turns that into per-field confirmation checkboxes."""
-    claim = _in_review.get(claim_id)
-    if claim is None:
-        raise HTTPException(status_code=404, detail="No such claim in review.")
-
-    problems = missing_mandatory(claim.template, request.fields)
+    template = DEFAULT_TEMPLATE
+    problems = missing_mandatory(template, request.fields)
     unconfirmed = [p for p in problems if p not in request.confirmed_missing]
     if unconfirmed:
         raise HTTPException(
@@ -149,22 +138,22 @@ def approve(claim_id: str, request: ApproveRequest) -> dict:
             },
         )
 
-    saved = db_service.save_approved(
-        source_filename=claim.filename,
-        template=claim.template,
+    saved = db_service.approve(
+        claim_id,
         fields=request.fields,
         confirmed_missing=[p for p in problems if p in request.confirmed_missing],
     )
-    del _in_review[claim_id]
+    if saved is None:
+        raise HTTPException(status_code=404, detail="No such claim in review.")
     return {"approved": True, "claim": saved, "pending_count": queue_service.size()}
 
 
 @app.post("/review/{claim_id}/reject")
 def reject(claim_id: str) -> dict:
-    """The human's other power: throw the proposal away. Nothing is stored."""
-    if claim_id not in _in_review:
+    """The human's other power. The claim is recorded as rejected; it never
+    becomes a fact, but the decision itself is part of the audit trail."""
+    if not db_service.reject(claim_id):
         raise HTTPException(status_code=404, detail="No such claim in review.")
-    del _in_review[claim_id]
     return {"rejected": True, "pending_count": queue_service.size()}
 
 

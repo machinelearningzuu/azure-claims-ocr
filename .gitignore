@@ -1,8 +1,9 @@
 # Secrets — never commit
 .env
 
-# Local database (Layer 1)
+# Local databases (Layer 1 + test runs)
 claims.db
+test_claims.db
 
 # Python
 __pycache__/
