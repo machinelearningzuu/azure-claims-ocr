@@ -1,4 +1,4 @@
-"""OCR interface — the AI step.
+"""OCR / extraction service: the AI step.
 
 The rest of the app only knows one function:
 
@@ -6,12 +6,18 @@ The rest of the app only knows one function:
 
 Behind it sits Azure Document Intelligence's "prebuilt-document" model, which
 returns generic key/value pairs it found on the page (e.g. "Date of birth:"
-→ "12/03/1975"), each with a confidence score. We then map those raw pairs
-onto the template's field specs using their synonym phrases.
+maps to "12/03/1975"), each with a confidence score. We then map those raw
+pairs onto the template's field specs (config/templates.yaml) using their
+synonym phrases.
+
+This is the seam where a different extractor would plug in: any engine that
+can produce (label, value, confidence) triples, including an LLM asked to
+extract fields from the page text, could replace the Azure call without
+touching the matching logic or anything outside this file.
 
 Why confidence matters here: the score is the model telling us how sure it
-is. We pass it through untouched so the review layer can route low-confidence
-fields to the human's attention. The OCR layer PROPOSES — it never decides.
+is. We pass it through untouched so the review layer can route uncertain
+fields to the human's attention. This service PROPOSES; it never decides.
 """
 
 import re
@@ -38,15 +44,15 @@ def _get_client() -> DocumentAnalysisClient:
 
 
 def match_raw_pairs(raw_pairs: list[tuple], template: str) -> list[dict]:
-    """Map raw OCR key/value pairs onto the template's fields. Pure function —
-    no network, no Azure — so it is unit-testable in CI, where no OCR
-    credentials exist. `raw_pairs` is [(normalized_label, value, confidence)].
+    """Map raw OCR key/value pairs onto the template's fields. Pure function,
+    no network and no Azure, so it is unit-testable anywhere.
+    `raw_pairs` is [(normalized_label, value, confidence)].
     """
     fields = []
     for spec in template_fields(template):
         # Best match wins. Score = (synonym length, confidence): a longer
-        # matched phrase is more specific — "date of birth" must beat a
-        # stray match on just "date" — and confidence breaks ties.
+        # matched phrase is more specific ("date of birth" must beat a
+        # stray match on just "date") and confidence breaks ties.
         best_value, best_confidence, best_score = None, 0.0, (0, 0.0)
         for label, value, confidence in raw_pairs:
             for phrase in spec.synonyms:
@@ -64,9 +70,9 @@ def extract_fields(document_bytes: bytes, template: str = DEFAULT_TEMPLATE) -> l
     """Run real Azure OCR on the document and return the template's fields.
 
     Every field in the template is always returned, in spec order. A field
-    the OCR couldn't find comes back with value=None and confidence=0.0 —
+    the OCR couldn't find comes back with value=None and confidence=0.0, so
     the human review screen always shows the complete picture, including
-    what the AI *failed* to find, instead of silently dropping fields.
+    what the AI failed to find, instead of silently dropping fields.
     """
     client = _get_client()
     poller = client.begin_analyze_document("prebuilt-document", document=document_bytes)

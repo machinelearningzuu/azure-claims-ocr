@@ -3,13 +3,13 @@ MetLife TPD Initial Information Form template pages.
 
 For each of 6 fictional personas, three variants are produced:
 
-    full            — every field filled
-    mandatory_only  — mandatory fields (+ one contact) filled, optional blank
-    gaps            — mandatory_only, minus 1-2 mandatory fields deliberately
+    full            - every field filled
+    mandatory_only  - mandatory fields (+ one contact) filled, optional blank
+    gaps            - mandatory_only, minus 1-2 mandatory fields deliberately
                       left blank (seeded per persona, so runs are reproducible)
                       → exercises the approval gate in the app
 
-Each document is a 2-page PDF (pages 2/10 and 3/10 of the original form —
+Each document is a 2-page PDF (pages 2/10 and 3/10 of the original form -
 the pages embedded in the Process Definition Document; conveniently the
 Azure free tier OCRs exactly 2 pages per call). Next to every PDF sits a
 ground-truth JSON with the values written onto the page and the list of
@@ -42,7 +42,7 @@ INK = (36, 36, 120)  # pen-blue
 
 # ---------------------------------------------------------------------------
 # Where each answer is written, in pixels on the 993x1404 template scans.
-# (page, x, y[, font_size]) — tuned by generating a calibration sheet and
+# (page, x, y[, font_size]) - tuned by generating a calibration sheet and
 # looking at it. "extra" entries are realism-only: drawn on the page but not
 # part of the app's extraction schema.
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ POSITIONS = {
     "address_postcode":   (1, 842, 752),
     "contact_phone":      (1, 62, 810),
     "email":              (1, 512, 810),
-    "gender":             (1, None, 858),  # checkbox — x chosen by value
+    "gender":             (1, None, 858),  # checkbox - x chosen by value
     "date_of_birth":      (1, 630, 866),
     "diagnosis":          (1, 66, 1155, 14),
     "date_symptoms_commenced": (1, 522, 1160, 13),

@@ -1,0 +1,115 @@
+# Document template registry.
+#
+# Each template describes one claim form: which fields to extract, which are
+# mandatory, and the label phrases (synonyms) that identify each field on the
+# printed page. The app loads this file at startup and validates every entry
+# against the FieldSpec model in app/models.py, so a typo here fails loudly
+# at boot instead of silently at review time.
+#
+# Adding support for a new form means adding a new template block here.
+# No Python changes needed.
+#
+# Field keys:
+#   name             snake_case identifier, used across the app and database
+#   label            human-readable name shown in the review UI
+#   mandatory        the approval gate refuses to commit while this is empty,
+#                    unless the reviewer explicitly confirms it as missing
+#   mandatory_group  "at least one of" rule: each member is optional on its
+#                    own, but the group as a whole must have a value
+#   synonyms         normalized label phrases used to match OCR output
+
+default_template: metlife_tpd_initial
+
+templates:
+  metlife_tpd_initial:
+    label: MetLife TPD Initial Information Form
+    fields:
+      # Identity: who is claiming (mandatory)
+      - name: member_number
+        label: Policy / fund member number
+        mandatory: true
+        synonyms: [policy number fund member number, fund member number, policy number, member number]
+      - name: given_names
+        label: Given name(s)
+        mandatory: true
+        synonyms: [given name, full name]
+      - name: surname
+        label: Surname
+        mandatory: true
+        synonyms: [surname]
+      - name: date_of_birth
+        label: Date of birth
+        mandatory: true
+        synonyms: [date of birth, dob]
+      - name: address_street
+        label: Address
+        mandatory: true
+        synonyms: [address]
+      - name: address_suburb
+        label: Suburb
+        mandatory: true
+        synonyms: [suburb]
+      - name: address_state
+        label: State
+        mandatory: true
+        synonyms: [state]
+      - name: address_postcode
+        label: Postcode
+        mandatory: true
+        synonyms: [postcode]
+
+      # Contact: at least ONE of these two (group rule)
+      - name: contact_phone
+        label: Preferred contact number
+        mandatory_group: contact
+        synonyms: [preferred contact number, contact number, phone]
+      - name: email
+        label: Email
+        mandatory_group: contact
+        synonyms: [email, e mail]
+
+      # The claim's substance: what happened and when (mandatory)
+      - name: diagnosis
+        label: Medical condition (diagnosis)
+        mandatory: true
+        synonyms: [unfit for work, what is the medical condition, medical condition]
+      - name: date_of_disability
+        label: Date of disability
+        mandatory: true
+        synonyms: [date of disability]
+      - name: date_last_worked
+        label: Date last at work
+        mandatory: true
+        synonyms: [last at work]
+
+      # The legal act (mandatory; OCR can realistically only find the date)
+      - name: signature_date
+        label: Signature date
+        mandatory: true
+        synonyms: [date dd mm yyyy]
+
+      # Enrichment: helps assessment, never blocks intake (optional)
+      - name: title
+        label: Title
+        synonyms: [title]
+      - name: previous_names
+        label: Previous name(s)
+        synonyms: [previous name]
+      - name: gender
+        label: Gender
+        synonyms: [gender]
+      - name: date_symptoms_commenced
+        label: Date symptoms commenced
+        synonyms: [date symptoms commenced, symptoms commenced]
+      - name: date_first_consulted
+        label: Date first consulted practitioner
+        synonyms: [first consulted a medical practitioner, date you first consulted]
+      - name: accident_related
+        label: Accident-related (Yes/No)
+        synonyms: [related to an accident]
+      - name: doctor_name
+        label: Doctor's name
+        synonyms: [doctor s name, doctors name]
+      - name: doctor_specialty
+        label: Doctor's specialty
+        synonyms: [specialty]

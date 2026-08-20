@@ -1,9 +1,9 @@
-"""Database interface — human-approved facts ONLY.
+"""Database service: human-approved facts ONLY.
 
 The rest of the app only knows two operations:
 
-    save_approved(...)   — write one human-approved claim
-    list_approved()      — read back all approved claims
+    save_approved(...)   write one human-approved claim
+    list_approved()      read back all approved claims
 
 There is deliberately NO function here for saving raw OCR output. If the
 code can't express "save unreviewed AI data", nobody can accidentally do it.
@@ -52,7 +52,7 @@ def save_approved(
     confirmed_missing: list[str],
 ) -> dict:
     """Commit one human-approved claim. `fields` holds the values as the
-    human left them after review — corrections included. `confirmed_missing`
+    human left them after review, corrections included. `confirmed_missing`
     records which mandatory fields the human explicitly accepted as absent,
     so the audit trail shows the skip was a decision, not an oversight."""
     row = ApprovedClaimRow(

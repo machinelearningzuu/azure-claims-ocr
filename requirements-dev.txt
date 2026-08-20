@@ -1,3 +1,4 @@
-# Tools used by CI and local development only — not needed to run the app.
+# Tools for local development and testing only. Not needed to run the app.
 pytest==8.3.4
 ruff==0.8.4
+pillow==11.1.0    # scripts/make_dataset.py renders the test documents

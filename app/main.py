@@ -1,8 +1,8 @@
-"""FastAPI app — the human-in-the-loop gate.
+"""FastAPI app: the human-in-the-loop gate.
 
 The flow, and where each piece of the pattern lives:
 
-    POST /claims/upload        AI proposes:   OCR → publish to pending queue
+    POST /claims/upload        AI proposes:   OCR, then publish to pending queue
     GET  /review/next          human pulls the next proposal to review
     POST /review/{id}/approve  human commits: ONLY here does data reach the DB
     POST /review/{id}/reject   human discards a proposal entirely
@@ -11,8 +11,8 @@ The flow, and where each piece of the pattern lives:
 
 Two rules are enforced here:
 
-1. There is no code path from OCR output to db.save_approved() that does not
-   pass through the approve endpoint — i.e. through a human.
+1. There is no code path from OCR output to db_service.save_approved() that
+   does not pass through the approve endpoint, i.e. through a human.
 2. The gate rule: approval is REFUSED while a mandatory field is empty,
    unless the human has explicitly confirmed that specific field as missing.
    Skipping a mandatory field must be a deliberate act, never a default.
@@ -25,7 +25,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from app import config, db, ocr, review_queue
+from app import config
 from app.models import (
     DEFAULT_TEMPLATE,
     ApproveRequest,
@@ -34,8 +34,9 @@ from app.models import (
     missing_mandatory,
     template_fields,
 )
+from app.services import db_service, ocr_service, queue_service
 
-app = FastAPI(title="Claims OCR — human-in-the-loop")
+app = FastAPI(title="Claims OCR - human-in-the-loop")
 
 # Items a human has pulled from the queue but not yet approved/rejected.
 # This mirrors what Azure Service Bus calls "peek-lock": consumed from the
@@ -58,7 +59,7 @@ def index() -> FileResponse:
 
 @app.get("/template")
 def template_spec() -> dict:
-    """Field specs for the active template — the UI renders itself from this,
+    """Field specs for the active template. The UI renders itself from this,
     so adding a new template never means editing the HTML."""
     return {
         "name": DEFAULT_TEMPLATE,
@@ -69,15 +70,15 @@ def template_spec() -> dict:
 @app.post("/claims/upload")
 async def upload_claim(file: UploadFile = File(...)) -> dict:
     """The AI step. Note what this handler does NOT do: it never touches the
-    database. OCR output becomes a PendingClaim and goes into the queue —
+    database. OCR output becomes a PendingClaim and goes into the queue,
     a proposal awaiting judgment, not a stored fact."""
     document_bytes = await file.read()
     if not document_bytes:
         raise HTTPException(status_code=400, detail="Empty file.")
 
-    extracted = ocr.extract_fields(document_bytes, DEFAULT_TEMPLATE)  # real Azure OCR call
+    extracted = ocr_service.extract_fields(document_bytes, DEFAULT_TEMPLATE)  # real Azure OCR call
 
-    # A field needs the human's attention when the AI is unsure of it —
+    # A field needs the human's attention when the AI is unsure of it,
     # OR when it's mandatory and the AI found nothing at all.
     specs = {spec.name: spec for spec in template_fields(DEFAULT_TEMPLATE)}
     claim = PendingClaim(
@@ -96,9 +97,9 @@ async def upload_claim(file: UploadFile = File(...)) -> dict:
             for field in extracted
         ],
     )
-    review_queue.publish(claim)
+    queue_service.publish(claim)
 
-    return {"queued": True, "id": claim.id, "pending_count": review_queue.size()}
+    return {"queued": True, "id": claim.id, "pending_count": queue_service.size()}
 
 
 @app.get("/review/next", response_model=None)
@@ -107,7 +108,7 @@ def next_for_review() -> Response | PendingClaim:
     (e.g. the page was refreshed), re-serve it rather than losing it."""
     if _in_review:
         return next(iter(_in_review.values()))
-    claim = review_queue.consume()
+    claim = queue_service.consume()
     if claim is None:
         return Response(status_code=204)  # nothing waiting
     _in_review[claim.id] = claim
@@ -122,7 +123,7 @@ def approve(claim_id: str, request: ApproveRequest) -> dict:
 
     The gate: if mandatory fields are empty and the human has NOT explicitly
     confirmed each one as missing, approval is refused with the list of
-    problems — the UI turns that into per-field confirmation checkboxes."""
+    problems. The UI turns that into per-field confirmation checkboxes."""
     claim = _in_review.get(claim_id)
     if claim is None:
         raise HTTPException(status_code=404, detail="No such claim in review.")
@@ -138,14 +139,14 @@ def approve(claim_id: str, request: ApproveRequest) -> dict:
             },
         )
 
-    saved = db.save_approved(
+    saved = db_service.save_approved(
         source_filename=claim.filename,
         template=claim.template,
         fields=request.fields,
         confirmed_missing=[p for p in problems if p in request.confirmed_missing],
     )
     del _in_review[claim_id]
-    return {"approved": True, "claim": saved, "pending_count": review_queue.size()}
+    return {"approved": True, "claim": saved, "pending_count": queue_service.size()}
 
 
 @app.post("/review/{claim_id}/reject")
@@ -154,9 +155,9 @@ def reject(claim_id: str) -> dict:
     if claim_id not in _in_review:
         raise HTTPException(status_code=404, detail="No such claim in review.")
     del _in_review[claim_id]
-    return {"rejected": True, "pending_count": review_queue.size()}
+    return {"rejected": True, "pending_count": queue_service.size()}
 
 
 @app.get("/claims/approved")
 def approved_claims() -> list[dict]:
-    return db.list_approved()
+    return db_service.list_approved()

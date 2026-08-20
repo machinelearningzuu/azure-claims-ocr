@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Claims OCR — Human Review</title>
+<title>Claims OCR - Human Review</title>
 <style>
-  /* Plain, readable styling — no framework. */
+  /* Plain, readable styling - no framework. */
   body { font-family: system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: #1a1a2e; }
   h1 { font-size: 1.4rem; }
   h2 { font-size: 1.05rem; border-bottom: 2px solid #e0e0e8; padding-bottom: .3rem; margin-top: 2.2rem; }
@@ -19,8 +19,8 @@
   th { background: #f4f4f8; }
   input[type=text] { width: 95%; padding: .35rem; border: 1px solid #bbb; border-radius: 4px; font-size: .95rem; }
   /* Confidence routing + the mandatory gate, made visible */
-  .flagged { background: #fff8ec; }                 /* low confidence — check it */
-  .missing { background: #fff0ee; }                 /* mandatory & empty — the gate */
+  .flagged { background: #fff8ec; }                 /* low confidence - check it */
+  .missing { background: #fff0ee; }                 /* mandatory & empty - the gate */
   .missing input[type=text] { border-color: #d9534f; }
   .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; white-space: nowrap; }
   .badge.ok       { background: #e2f3e8; color: #1e7a45; }
@@ -35,11 +35,11 @@
 </head>
 <body>
 
-<h1>Claims OCR — Human-in-the-Loop Review</h1>
+<h1>Claims OCR - Human-in-the-Loop Review</h1>
 <p class="muted">
   Upload → OCR proposes fields (with confidence) → pending queue →
   <strong>you</strong> review every field → only Approve writes to the database.
-  Mandatory fields left empty must be explicitly confirmed before approval — the gate.
+  Mandatory fields left empty must be explicitly confirmed before approval - the gate.
 </p>
 
 <div id="banner" class="banner"></div>
@@ -59,7 +59,7 @@
        <span class="muted" id="reviewMeta"></span></p>
     <p class="muted">Check every value against the document. Amber rows are
        low-confidence; red rows are <strong>mandatory fields the OCR found
-       empty</strong> — fill them from the document, or tick “confirm missing”
+       empty</strong> - fill them from the document, or tick “confirm missing”
        to approve without them (a deliberate, recorded decision).</p>
     <table>
       <thead><tr><th>Field</th><th></th><th>Extracted value (editable)</th><th>Confidence</th></tr></thead>
@@ -82,7 +82,7 @@
 </section>
 
 <script>
-let template = null;      // field specs, fetched from /template — drives all rendering
+let template = null;      // field specs, fetched from /template - drives all rendering
 let currentClaim = null;  // the PendingClaim currently on screen
 
 function pretty(name) {
@@ -107,7 +107,7 @@ async function upload() {
     const res = await fetch("/claims/upload", { method: "POST", body: form });
     if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
     const data = await res.json();
-    showBanner("OCR done — proposal is in the review queue. Nothing saved yet.", "info");
+    showBanner("OCR done - proposal is in the review queue. Nothing saved yet.", "info");
     input.value = "";
     updatePendingCount(data.pending_count);
     await loadNextReview();
@@ -144,8 +144,8 @@ async function loadNextReview() {
 
     const pct = Math.round(field.confidence * 100) + "%";
     let badge;
-    if (isMissingMandatory)      badge = `<span class="badge gap">not found — mandatory</span>`;
-    else if (field.needs_review) badge = `<span class="badge low">${pct} — check this</span>`;
+    if (isMissingMandatory)      badge = `<span class="badge gap">not found - mandatory</span>`;
+    else if (field.needs_review) badge = `<span class="badge low">${pct} - check this</span>`;
     else                         badge = `<span class="badge ok">${pct}</span>`;
 
     const mandTag = spec.mandatory ? `<span class="badge mand">mandatory</span>`
@@ -161,7 +161,7 @@ async function loadNextReview() {
       <td>${spec.label}</td>
       <td>${mandTag}</td>
       <td><input type="text" data-field="${field.name}" value="${field.value ?? ""}"
-                 placeholder="${field.value === null ? "not found by OCR — fill in from document" : ""}">
+                 placeholder="${field.value === null ? "not found by OCR - fill in from document" : ""}">
           ${confirmBox}</td>
       <td>${badge}</td>`;
     tbody.appendChild(tr);
@@ -182,7 +182,7 @@ function collectConfirmedMissing() {
     confirmed.push(box.dataset.confirm);
   });
   // Group rules ("at least one contact"): if every member of a group is
-  // empty, the group itself must be confirmed — we surface it as one entry.
+  // empty, the group itself must be confirmed - we surface it as one entry.
   const groups = {};
   for (const spec of template.fields) {
     if (!spec.mandatory_group) continue;
@@ -199,7 +199,7 @@ function collectConfirmedMissing() {
 
 async function approve() {
   if (!currentClaim) return;
-  // The human commit: values as they are NOW — after review and correction —
+  // The human commit: values as they are NOW - after review and correction -
   // plus explicit per-field confirmations for anything knowingly left empty.
   const res = await fetch(`/review/${currentClaim.id}/approve`, {
     method: "POST",
@@ -211,12 +211,12 @@ async function approve() {
     const data = await res.json();
     const names = (data.detail.unconfirmed_missing || []).map(n =>
       n.startsWith("group:") ? `at least one ${n.slice(6)} field` : pretty(n));
-    showBanner("Gate: fill or explicitly confirm these mandatory fields first — " + names.join(", "), "error");
+    showBanner("Gate: fill or explicitly confirm these mandatory fields first - " + names.join(", "), "error");
     return;
   }
   if (!res.ok) { showBanner("Approve failed.", "error"); return; }
   const data = await res.json();
-  showBanner("Approved — written to the database.", "info");
+  showBanner("Approved - written to the database.", "info");
   updatePendingCount(data.pending_count);
   await Promise.all([loadNextReview(), loadApproved()]);
 }
@@ -226,7 +226,7 @@ async function reject() {
   const res = await fetch(`/review/${currentClaim.id}/reject`, { method: "POST" });
   if (!res.ok) { showBanner("Reject failed.", "error"); return; }
   const data = await res.json();
-  showBanner("Rejected — proposal discarded, nothing was saved.", "info");
+  showBanner("Rejected - proposal discarded, nothing was saved.", "info");
   updatePendingCount(data.pending_count);
   await loadNextReview();
 }

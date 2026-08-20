@@ -1,35 +1,31 @@
-"""Shared data shapes + the template registry.
+"""Shared data shapes, plus loading of the template registry from YAML.
 
 Two distinct things flow through this app, and keeping them distinct is the
 whole point of the design:
 
-  * PendingClaim  — an AI *proposal*. It lives in the review queue. It is
-                    allowed to be wrong. It never touches the database.
-  * an approved claim (see db.py) — human-verified fact. Only this is ever
-                    written to the database.
+  * PendingClaim: an AI proposal. It lives in the review queue. It is
+    allowed to be wrong. It never touches the database.
+  * an approved claim (see services/db_service.py): human-verified fact.
+    Only this is ever written to the database.
 
-Schema is TEMPLATE-DRIVEN: each document template (a specific claim form)
-declares its own field specs — what to extract, which fields are mandatory,
-and what label text identifies each field on the page. Adding support for a
-new form means adding one entry to TEMPLATES, not touching app logic.
+The field schema itself is CONFIGURATION, not code: it lives in
+config/templates.yaml. This module loads that file once at import time and
+validates every entry through the FieldSpec model, so a typo in the YAML
+fails loudly at startup instead of silently at review time.
 """
 
+from pathlib import Path
 from typing import Optional
 
+import yaml
 from pydantic import BaseModel
+
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "templates.yaml"
 
 
 class FieldSpec(BaseModel):
-    """One field a template expects.
-
-    mandatory        — the human cannot approve while this is empty, unless
-                       they explicitly confirm it as missing (the gate rule).
-    mandatory_group  — group name for "at least one of these" rules, e.g.
-                       phone/email: each member is individually optional but
-                       the group as a whole is mandatory.
-    synonyms         — label phrases that identify this field on the printed
-                       form; used by the OCR matcher.
-    """
+    """One field a template expects. See config/templates.yaml for the
+    meaning of each key; that file is the single source of truth."""
 
     name: str
     label: str
@@ -38,62 +34,19 @@ class FieldSpec(BaseModel):
     synonyms: list[str]
 
 
-# Template #1: MetLife TPD Initial Information Form (pages 2/10 and 3/10 —
-# the pages embedded in the Process Definition Document).
-# Template #2 (AIA Claim Summary Sheet — employer, balance, etc.) can be
-# added here later without changing any other file.
-METLIFE_TPD_INITIAL = [
-    # --- identity: who is claiming (mandatory) ---
-    FieldSpec(name="member_number", label="Policy / fund member number", mandatory=True,
-              synonyms=["policy number fund member number", "fund member number", "policy number", "member number"]),
-    FieldSpec(name="given_names", label="Given name(s)", mandatory=True,
-              synonyms=["given name", "full name"]),
-    FieldSpec(name="surname", label="Surname", mandatory=True,
-              synonyms=["surname"]),
-    FieldSpec(name="date_of_birth", label="Date of birth", mandatory=True,
-              synonyms=["date of birth", "dob"]),
-    FieldSpec(name="address_street", label="Address", mandatory=True,
-              synonyms=["address"]),
-    FieldSpec(name="address_suburb", label="Suburb", mandatory=True,
-              synonyms=["suburb"]),
-    FieldSpec(name="address_state", label="State", mandatory=True,
-              synonyms=["state"]),
-    FieldSpec(name="address_postcode", label="Postcode", mandatory=True,
-              synonyms=["postcode"]),
-    # --- contact: at least ONE of these two (group rule) ---
-    FieldSpec(name="contact_phone", label="Preferred contact number", mandatory_group="contact",
-              synonyms=["preferred contact number", "contact number", "phone"]),
-    FieldSpec(name="email", label="Email", mandatory_group="contact",
-              synonyms=["email", "e mail"]),
-    # --- the claim's substance: what and when (mandatory) ---
-    FieldSpec(name="diagnosis", label="Medical condition (diagnosis)", mandatory=True,
-              synonyms=["unfit for work", "what is the medical condition", "medical condition"]),
-    FieldSpec(name="date_of_disability", label="Date of disability", mandatory=True,
-              synonyms=["date of disability"]),
-    FieldSpec(name="date_last_worked", label="Date last at work", mandatory=True,
-              synonyms=["last at work"]),
-    # --- the legal act (mandatory; OCR can realistically only find the date) ---
-    FieldSpec(name="signature_date", label="Signature date", mandatory=True,
-              synonyms=["date dd mm yyyy"]),
-    # --- enrichment: helps assessment, never blocks intake (optional) ---
-    FieldSpec(name="title", label="Title", synonyms=["title"]),
-    FieldSpec(name="previous_names", label="Previous name(s)", synonyms=["previous name"]),
-    FieldSpec(name="gender", label="Gender", synonyms=["gender"]),
-    FieldSpec(name="date_symptoms_commenced", label="Date symptoms commenced",
-              synonyms=["date symptoms commenced", "symptoms commenced"]),
-    FieldSpec(name="date_first_consulted", label="Date first consulted practitioner",
-              synonyms=["first consulted a medical practitioner", "date you first consulted"]),
-    FieldSpec(name="accident_related", label="Accident-related (Yes/No)",
-              synonyms=["related to an accident"]),
-    FieldSpec(name="doctor_name", label="Doctor's name", synonyms=["doctor s name", "doctors name"]),
-    FieldSpec(name="doctor_specialty", label="Doctor's specialty", synonyms=["specialty"]),
-]
+def _load_registry() -> tuple[str, dict[str, list[FieldSpec]]]:
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    templates = {
+        name: [FieldSpec(**field) for field in body["fields"]]
+        for name, body in raw["templates"].items()
+    }
+    default = raw["default_template"]
+    if default not in templates:
+        raise ValueError(f"default_template '{default}' is not defined in {CONFIG_PATH}")
+    return default, templates
 
-TEMPLATES: dict[str, list[FieldSpec]] = {
-    "metlife_tpd_initial": METLIFE_TPD_INITIAL,
-}
 
-DEFAULT_TEMPLATE = "metlife_tpd_initial"
+DEFAULT_TEMPLATE, TEMPLATES = _load_registry()
 
 
 def template_fields(template: str) -> list[FieldSpec]:
@@ -105,7 +58,7 @@ def missing_mandatory(template: str, fields: dict[str, Optional[str]]) -> list[s
     (and unsatisfied groups, as 'group:<name>') that are empty in `fields`.
 
     Approval is blocked while this list is non-empty, unless the human has
-    explicitly confirmed each entry as missing — skipping a mandatory field
+    explicitly confirmed each entry as missing. Skipping a mandatory field
     must be a deliberate human act, never a silent default.
     """
     problems = []

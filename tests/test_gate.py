@@ -1,6 +1,5 @@
-"""Unit tests for the approval gate — the rule that mandatory fields cannot
-be silently skipped. This is the most important logic in the app, so it is
-the first thing CI protects."""
+"""Unit tests for the approval gate: the rule that mandatory fields cannot
+be silently skipped. This is the most important logic in the app."""
 
 from app.models import DEFAULT_TEMPLATE, template_fields, missing_mandatory
 

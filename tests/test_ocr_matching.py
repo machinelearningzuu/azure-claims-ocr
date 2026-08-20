@@ -1,8 +1,7 @@
-"""Unit tests for the OCR field matcher — the pure mapping from raw
-key/value pairs to template fields. Runs without Azure, so CI can protect
-it on every pull request."""
+"""Unit tests for the OCR field matcher: the pure mapping from raw
+key/value pairs to template fields. Runs without Azure."""
 
-from app.ocr import _normalize, match_raw_pairs
+from app.services.ocr_service import _normalize, match_raw_pairs
 
 TEMPLATE = "metlife_tpd_initial"
 
@@ -46,7 +45,7 @@ def test_longer_synonym_wins_over_shorter_one():
 def test_unfound_fields_come_back_empty_with_zero_confidence():
     fields = match_raw_pairs([], TEMPLATE)
     assert all(f["value"] is None and f["confidence"] == 0.0 for f in fields)
-    # ...and the full template is still returned — nothing silently dropped.
+    # ...and the full template is still returned - nothing silently dropped.
     assert len(fields) == 22
 
 

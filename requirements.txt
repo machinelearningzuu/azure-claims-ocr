@@ -3,14 +3,12 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20        # FastAPI file uploads
 python-dotenv==1.0.1
+pyyaml==6.0.2                   # loads config/templates.yaml
 
 # --- Azure Document Intelligence (the OCR step) ---
 # NOTE: the Azure *portal* calls the service "Document Intelligence",
 # but the Python SDK still ships under its old name "Form Recognizer".
 azure-ai-formrecognizer==3.3.3
 
-# --- Database (Layer 1: SQLite via SQLAlchemy; Layer 2 will swap the URL to Postgres) ---
+# --- Database (Layer 1: SQLite via SQLAlchemy; Layer 2 swaps the URL to Postgres) ---
 sqlalchemy==2.0.36
-
-# --- Dev only: generate a fake claim PDF to test with (scripts/make_sample_claim.py) ---
-reportlab==4.2.5
