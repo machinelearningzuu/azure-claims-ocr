@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claims OCR — Human Review</title>
+<style>
+  /* Plain, readable styling — no framework. */
+  body { font-family: system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: #1a1a2e; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.05rem; border-bottom: 2px solid #e0e0e8; padding-bottom: .3rem; margin-top: 2.2rem; }
+  section { margin-bottom: 1rem; }
+  .muted { color: #777; font-size: .9rem; }
+  button { padding: .5rem 1.1rem; border: none; border-radius: 6px; cursor: pointer; font-size: .95rem; }
+  .primary { background: #2d4a8a; color: #fff; }
+  .approve { background: #1e7a45; color: #fff; }
+  .reject  { background: #a33; color: #fff; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { border: 1px solid #ddd; padding: .4rem .6rem; text-align: left; vertical-align: middle; }
+  th { background: #f4f4f8; }
+  input[type=text] { width: 95%; padding: .35rem; border: 1px solid #bbb; border-radius: 4px; font-size: .95rem; }
+  /* Confidence routing + the mandatory gate, made visible */
+  .flagged { background: #fff8ec; }                 /* low confidence — check it */
+  .missing { background: #fff0ee; }                 /* mandatory & empty — the gate */
+  .missing input[type=text] { border-color: #d9534f; }
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; white-space: nowrap; }
+  .badge.ok       { background: #e2f3e8; color: #1e7a45; }
+  .badge.low      { background: #fdf0d8; color: #8a6100; }
+  .badge.gap      { background: #fbe3e0; color: #a33; }
+  .badge.mand     { background: #e8eefb; color: #2d4a8a; }
+  .confirm-missing { font-size: .8rem; color: #a33; white-space: nowrap; }
+  .banner { padding: .6rem .9rem; border-radius: 6px; margin: .8rem 0; display: none; }
+  .banner.info  { background: #e8eefb; color: #2d4a8a; display: block; }
+  .banner.error { background: #fbe3e0; color: #a33; display: block; }
+</style>
+</head>
+<body>
+
+<h1>Claims OCR — Human-in-the-Loop Review</h1>
+<p class="muted">
+  Upload → OCR proposes fields (with confidence) → pending queue →
+  <strong>you</strong> review every field → only Approve writes to the database.
+  Mandatory fields left empty must be explicitly confirmed before approval — the gate.
+</p>
+
+<div id="banner" class="banner"></div>
+
+<h2>1 · Upload a claim document</h2>
+<section>
+  <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp">
+  <button class="primary" id="uploadBtn" onclick="upload()">Upload &amp; run OCR</button>
+  <span class="muted" id="pendingCount"></span>
+</section>
+
+<h2>2 · Review the AI's proposal</h2>
+<section id="reviewSection">
+  <p class="muted" id="reviewEmpty">Nothing waiting for review.</p>
+  <div id="reviewCard" style="display:none">
+    <p><strong id="reviewFilename"></strong>
+       <span class="muted" id="reviewMeta"></span></p>
+    <p class="muted">Check every value against the document. Amber rows are
+       low-confidence; red rows are <strong>mandatory fields the OCR found
+       empty</strong> — fill them from the document, or tick “confirm missing”
+       to approve without them (a deliberate, recorded decision).</p>
+    <table>
+      <thead><tr><th>Field</th><th></th><th>Extracted value (editable)</th><th>Confidence</th></tr></thead>
+      <tbody id="reviewFields"></tbody>
+    </table>
+    <p>
+      <button class="approve" onclick="approve()">Approve → commit to database</button>
+      <button class="reject" onclick="reject()">Reject → discard</button>
+    </p>
+  </div>
+</section>
+
+<h2>3 · Approved claims (the database)</h2>
+<section>
+  <p class="muted">Everything below passed through a human. Nothing arrives here any other way.</p>
+  <div style="overflow-x:auto"><table>
+    <thead><tr id="approvedHeader"></tr></thead>
+    <tbody id="approvedRows"></tbody>
+  </table></div>
+</section>
+
+<script>
+let template = null;      // field specs, fetched from /template — drives all rendering
+let currentClaim = null;  // the PendingClaim currently on screen
+
+function pretty(name) {
+  const spec = template.fields.find(f => f.name === name);
+  return spec ? spec.label : name.replace(/_/g, " ");
+}
+
+function showBanner(text, kind) {
+  const el = document.getElementById("banner");
+  el.textContent = text;
+  el.className = "banner " + kind;
+}
+
+async function upload() {
+  const input = document.getElementById("file");
+  if (!input.files.length) { showBanner("Pick a file first.", "error"); return; }
+  const btn = document.getElementById("uploadBtn");
+  btn.disabled = true; btn.textContent = "Running OCR…";
+  try {
+    const form = new FormData();
+    form.append("file", input.files[0]);
+    const res = await fetch("/claims/upload", { method: "POST", body: form });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    const data = await res.json();
+    showBanner("OCR done — proposal is in the review queue. Nothing saved yet.", "info");
+    input.value = "";
+    updatePendingCount(data.pending_count);
+    await loadNextReview();
+  } catch (err) {
+    showBanner("Upload failed: " + err.message, "error");
+  } finally {
+    btn.disabled = false; btn.textContent = "Upload & run OCR";
+  }
+}
+
+async function loadNextReview() {
+  const res = await fetch("/review/next");
+  if (res.status === 204) {
+    currentClaim = null;
+    document.getElementById("reviewCard").style.display = "none";
+    document.getElementById("reviewEmpty").style.display = "block";
+    return;
+  }
+  currentClaim = await res.json();
+  document.getElementById("reviewEmpty").style.display = "none";
+  document.getElementById("reviewCard").style.display = "block";
+  document.getElementById("reviewFilename").textContent = currentClaim.filename;
+  document.getElementById("reviewMeta").textContent =
+    ` · template: ${currentClaim.template} · uploaded ${currentClaim.uploaded_at}`;
+
+  const specByName = Object.fromEntries(template.fields.map(f => [f.name, f]));
+  const tbody = document.getElementById("reviewFields");
+  tbody.innerHTML = "";
+  for (const field of currentClaim.fields) {
+    const spec = specByName[field.name];
+    const isMissingMandatory = spec.mandatory && !field.value;
+    const tr = document.createElement("tr");
+    tr.className = isMissingMandatory ? "missing" : (field.needs_review ? "flagged" : "");
+
+    const pct = Math.round(field.confidence * 100) + "%";
+    let badge;
+    if (isMissingMandatory)      badge = `<span class="badge gap">not found — mandatory</span>`;
+    else if (field.needs_review) badge = `<span class="badge low">${pct} — check this</span>`;
+    else                         badge = `<span class="badge ok">${pct}</span>`;
+
+    const mandTag = spec.mandatory ? `<span class="badge mand">mandatory</span>`
+                  : spec.mandatory_group ? `<span class="badge mand">1 of: ${spec.mandatory_group}</span>`
+                  : "";
+    // The gate control: only mandatory fields get a "confirm missing" box,
+    // and ticking it is the human explicitly owning the gap.
+    const confirmBox = spec.mandatory
+      ? `<label class="confirm-missing"><input type="checkbox" data-confirm="${field.name}"> confirm missing</label>`
+      : "";
+
+    tr.innerHTML = `
+      <td>${spec.label}</td>
+      <td>${mandTag}</td>
+      <td><input type="text" data-field="${field.name}" value="${field.value ?? ""}"
+                 placeholder="${field.value === null ? "not found by OCR — fill in from document" : ""}">
+          ${confirmBox}</td>
+      <td>${badge}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function collectFields() {
+  const fields = {};
+  document.querySelectorAll("#reviewFields input[data-field]").forEach(input => {
+    fields[input.dataset.field] = input.value.trim() || null;
+  });
+  return fields;
+}
+
+function collectConfirmedMissing() {
+  const confirmed = [];
+  document.querySelectorAll("#reviewFields input[data-confirm]:checked").forEach(box => {
+    confirmed.push(box.dataset.confirm);
+  });
+  // Group rules ("at least one contact"): if every member of a group is
+  // empty, the group itself must be confirmed — we surface it as one entry.
+  const groups = {};
+  for (const spec of template.fields) {
+    if (!spec.mandatory_group) continue;
+    const val = document.querySelector(`#reviewFields input[data-field="${spec.name}"]`)?.value.trim();
+    groups[spec.mandatory_group] = (groups[spec.mandatory_group] || false) || !!val;
+  }
+  for (const [group, satisfied] of Object.entries(groups)) {
+    if (!satisfied && confirm(`No value in any "${group}" field (e.g. phone/email). Approve without it?`)) {
+      confirmed.push("group:" + group);
+    }
+  }
+  return confirmed;
+}
+
+async function approve() {
+  if (!currentClaim) return;
+  // The human commit: values as they are NOW — after review and correction —
+  // plus explicit per-field confirmations for anything knowingly left empty.
+  const res = await fetch(`/review/${currentClaim.id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: collectFields(), confirmed_missing: collectConfirmedMissing() }),
+  });
+  if (res.status === 422) {
+    // The gate refused: mandatory fields are empty and unconfirmed.
+    const data = await res.json();
+    const names = (data.detail.unconfirmed_missing || []).map(n =>
+      n.startsWith("group:") ? `at least one ${n.slice(6)} field` : pretty(n));
+    showBanner("Gate: fill or explicitly confirm these mandatory fields first — " + names.join(", "), "error");
+    return;
+  }
+  if (!res.ok) { showBanner("Approve failed.", "error"); return; }
+  const data = await res.json();
+  showBanner("Approved — written to the database.", "info");
+  updatePendingCount(data.pending_count);
+  await Promise.all([loadNextReview(), loadApproved()]);
+}
+
+async function reject() {
+  if (!currentClaim) return;
+  const res = await fetch(`/review/${currentClaim.id}/reject`, { method: "POST" });
+  if (!res.ok) { showBanner("Reject failed.", "error"); return; }
+  const data = await res.json();
+  showBanner("Rejected — proposal discarded, nothing was saved.", "info");
+  updatePendingCount(data.pending_count);
+  await loadNextReview();
+}
+
+function updatePendingCount(n) {
+  document.getElementById("pendingCount").textContent =
+    n > 0 ? `${n} more waiting in queue` : "";
+}
+
+async function loadApproved() {
+  const res = await fetch("/claims/approved");
+  const claims = await res.json();
+
+  const header = document.getElementById("approvedHeader");
+  header.innerHTML = "<th>Approved at</th><th>Source file</th>" +
+    template.fields.map(f => `<th>${f.label}</th>`).join("") + "<th>Confirmed missing</th>";
+
+  const tbody = document.getElementById("approvedRows");
+  tbody.innerHTML = "";
+  for (const claim of claims) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${claim.approved_at}</td><td>${claim.source_filename}</td>` +
+      template.fields.map(f => `<td>${claim.fields[f.name] ?? ""}</td>`).join("") +
+      `<td>${(claim.confirmed_missing || []).join(", ")}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function init() {
+  template = await (await fetch("/template")).json();
+  await Promise.all([loadNextReview(), loadApproved()]);
+}
+init();
+</script>
+</body>
+</html>

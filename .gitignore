@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+
+# Local database (Layer 1)
+claims.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated test documents
+sample_claim.pdf
+
+# Client source documents — never push these (the extracted templates in
+# docs/templates/ are enough for the repo)
+docs/*.docx
+
+# OS / editor
+.DS_Store
+.vscode/

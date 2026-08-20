@@ -31,20 +31,51 @@ human.
 
 ```
 app/
-  main.py          FastAPI routes — the human-in-the-loop gate lives here
-  ocr.py           OCR interface:   extract_fields(bytes) -> [{name, value, confidence}]
+  main.py          FastAPI routes — the human-in-the-loop gate + approval gate live here
+  ocr.py           OCR interface:   extract_fields(bytes, template) -> [{name, value, confidence}]
   review_queue.py  Queue interface: publish(item) / consume()   (in-process for Layer 1)
   db.py            DB interface:    save_approved(...) / list_approved()  (SQLite for Layer 1)
-  models.py        Shared shapes: PendingClaim (proposal) vs approved claim (fact)
+  models.py        Template registry (field specs, mandatory/optional, gate rule) + shared shapes
   config.py        All configuration from .env
-  static/index.html  The review page (plain HTML + JS)
+  static/index.html  The review page (plain HTML + JS, renders itself from /template)
 scripts/
-  make_sample_claim.py  Generates a fake claim PDF for testing
+  make_dataset.py       Generates the test dataset from the real form templates
+  make_sample_claim.py  (superseded by make_dataset.py — kept from the first iteration)
+docs/templates/  Real claim-form templates extracted from the Process Definition Document
+dataset/         Generated test documents (PDF) + ground truth (JSON)
 ```
 
 Each external dependency (OCR, queue, DB) sits behind its own small
 interface file, so Layers 2–3 swap implementations without touching app
 logic.
+
+## Schema: template-driven, with a mandatory-field gate
+
+Fields are not hard-coded: each document template declares its own field
+specs in `app/models.py` (`TEMPLATES`). Template #1 is the **MetLife TPD
+Initial Information Form** — mandatory fields (member number, names, DOB,
+address, diagnosis, date of disability, date last worked, signature date,
+plus "at least one contact" as a phone/email group rule) and optional
+enrichment fields (title, gender, symptom dates, doctor details, …).
+
+The gate rule: **approval is refused while a mandatory field is empty,
+unless the human explicitly ticks "confirm missing" for that field.**
+Skipping a mandatory field is a deliberate, recorded decision — the
+confirmations are stored with the claim as an audit trail.
+
+## The test dataset
+
+`python scripts/make_dataset.py` writes `dataset/`: 6 fictional personas ×
+3 variants = 18 two-page PDFs, each with a ground-truth JSON
+(values + which fields were deliberately left blank):
+
+- `*_full.pdf` — every field filled
+- `*_mandatory_only.pdf` — mandatory fields only, optional blank
+- `*_gaps.pdf` — mandatory-only **minus 1–2 mandatory fields** → these are
+  the documents that trip the approval gate
+
+`dataset/manifest.json` lists all 18. The ground truth exists so OCR output
+can be scored against known answers, not just eyeballed.
 
 ## Prerequisites
 
@@ -70,8 +101,8 @@ cp .env.example .env
 #    → edit .env and paste your Document Intelligence endpoint + key
 #      (portal: your resource → "Keys and Endpoint")
 
-# 4. (Optional but recommended) generate a fake claim PDF to test with
-python scripts/make_sample_claim.py
+# 4. Generate the test dataset (18 filled claim forms + ground truth)
+python scripts/make_dataset.py
 
 # 5. Run the app
 uvicorn app.main:app --reload
@@ -81,24 +112,29 @@ Open http://127.0.0.1:8000 in your browser.
 
 ## Testing the flow
 
-1. Upload `sample_claim.pdf` (or any scanned claim-like PDF/image).
-   The request goes to real Azure Document Intelligence over the internet —
-   expect a few seconds.
-2. The review pane shows the nine fields with confidence badges. Red rows
-   are below the confidence threshold (default 0.80, set in `.env`) — the
-   AI itself is unsure. Fields the OCR couldn't find at all appear empty at
-   0% for you to fill in.
-3. Deliberately corrupt a value, then fix it — what you approve is what's
+1. Upload `dataset/metlife-tpd_peter-mitchell_full.pdf`. The request goes to
+   real Azure Document Intelligence over the internet — expect a few seconds.
+2. The review pane shows the template's fields with confidence badges.
+   Amber rows are below the confidence threshold (default 0.80, set in
+   `.env`) — the AI itself is unsure. Red rows are mandatory fields the OCR
+   found empty.
+3. Compare against the ground truth
+   (`dataset/metlife-tpd_peter-mitchell_full.json`) — what did OCR get
+   right, wrong, and miss?
+4. Deliberately corrupt a value, then fix it — what you approve is what's
    stored, not what the OCR said.
-4. Click **Approve**: only now does anything reach the database
+5. Now upload a `*_gaps.pdf` and try to approve without touching anything:
+   the gate refuses. Fill the missing field, or tick "confirm missing" —
+   the confirmation is stored with the claim.
+6. Click **Approve**: only now does anything reach the database
    (`claims.db`). Or **Reject**: the proposal vanishes, nothing stored.
-5. Upload two documents back-to-back to see the queue hold the second one
+7. Upload two documents back-to-back to see the queue hold the second one
    while you review the first.
 
 To inspect the DB directly:
 
 ```bash
-sqlite3 claims.db "select member_name, diagnosis, approved_at from approved_claims;"
+sqlite3 claims.db "select approved_at, template, json_extract(fields_json,'$.surname') as surname, confirmed_missing_json from approved_claims;"
 ```
 
 ## Azure setup for Layer 1 (short form)
